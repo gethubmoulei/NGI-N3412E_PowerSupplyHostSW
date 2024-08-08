@@ -1,0 +1,7 @@
+<RCC>
+  <qresource>
+    <file>icon/trace.png</file>
+    <file>icon/chuanlian.png</file>
+    <file>icon/mult.png</file>
+  </qresource>
+</RCC>

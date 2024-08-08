@@ -1,0 +1,7 @@
+build/
+__pycache__/
+Logs/
+dist/
+test.py
+powerSupply.py
+*.spec
