@@ -244,6 +244,14 @@ class Window(QMainWindow, Ui_MainWindow):
                        self.layoutWidget, self.layoutWidget1, self.verticalLayoutWidget):
             widget.setMinimumSize(0, 0)
             widget.setMaximumSize(16777215, 16777215)
+        self.channelArea.setMinimumHeight(225)
+        for layout in (self.verticalLayout, self.verticalLayout_2, self.verticalLayout_3):
+            layout.setSpacing(6)
+        for layout in (self.formLayout, self.formLayout_3, self.formLayout_4):
+            layout.setVerticalSpacing(4)
+            layout.setHorizontalSpacing(8)
+        for layout in (self.horizontalLayout_11, self.horizontalLayout_12, self.horizontalLayout_13):
+            layout.setSpacing(6)
         for label in (self.label_CH1, self.label_CH2, self.label_CH3):
             label.setObjectName('channelTitle')
         for label in (self.label_CH1_ONOFF, self.label_CH2_ONOFF, self.label_CH3_ONOFF):
@@ -271,7 +279,11 @@ class Window(QMainWindow, Ui_MainWindow):
                        self.pushButton_CH1_ON, self.pushButton_CH2_ON, self.pushButton_CH3_ON,
                        self.pushButton_CH1_OFF, self.pushButton_CH2_OFF, self.pushButton_CH3_OFF):
             button.setCursor(Qt.PointingHandCursor)
+            button.setMaximumHeight(16777215)
             button.setMinimumHeight(32)
+        for button in (self.pushButton_CH1_ON, self.pushButton_CH2_ON, self.pushButton_CH3_ON,
+                       self.pushButton_CH1_OFF, self.pushButton_CH2_OFF, self.pushButton_CH3_OFF):
+            button.setMinimumHeight(28)
         for button in (self.pushButton_CH1_ON, self.pushButton_CH2_ON, self.pushButton_CH3_ON):
             button.setProperty('role', 'success')
         for button in (self.pushButton_CH1_OFF, self.pushButton_CH2_OFF, self.pushButton_CH3_OFF,
@@ -511,8 +523,8 @@ class Window(QMainWindow, Ui_MainWindow):
         self.w = pg.PlotWidget(axisItems={'bottom': axisItems})
         self.w.setBackground('#0b1220')
         self.w.showGrid(x=True, y=True, alpha=0.22)
-        self.w.setLabel('left', text='鐢靛帇', color='#bfdbfe')
-        self.w.setLabel('right', text='鐢垫祦', color='#bfdbfe')
+        self.w.setLabel('left', text='电压', color='#bfdbfe')
+        self.w.setLabel('right', text='电流', color='#bfdbfe')
         self.w.setLogMode(x=False, y=False)
         self.w.setMenuEnabled(False)
         self.w.getPlotItem().layout.setContentsMargins(8, 8, 8, 8)
@@ -916,8 +928,8 @@ class Window(QMainWindow, Ui_MainWindow):
         power_data = self.powerSupply.snapshot()
         powerStatus = power_data.get('Status1', 0) or power_data.get('Status2', 0) or power_data.get('Status3', 0)
         if powerStatus != 0:
-            self.dialog('璀﹀憡', '璇峰厛鍏抽棴杈撳嚭')
-            Log.logger.warning('璇峰厛鍏抽棴杈撳嚭')
+            self.dialog('警告', '请先关闭输出')
+            Log.logger.warning('请先关闭输出')
             self.comboBox_mode.setCurrentIndex(self.mode)
             return
         comboBox = self.sender()
@@ -930,8 +942,8 @@ class Window(QMainWindow, Ui_MainWindow):
             self.comboBox_mode.currentIndexChanged.disconnect(self.set_mode)
             comboBox.setCurrentIndex(mode_old)
             self.comboBox_mode.currentIndexChanged.connect(self.set_mode)
-            self.dialog('閿欒', '璁剧疆妯″紡澶辫触')
-            Log.logger.error('璁剧疆妯″紡澶辫触')
+            self.dialog('错误', '设置模式失败')
+            Log.logger.error('设置模式失败')
             return
         self.update_mode_overlay()
         self.comboBox_mode.currentIndexChanged.disconnect(self.set_mode)
@@ -1128,8 +1140,8 @@ class PowerSupply(QThread):
         try:
             self.Power = self.rm.open_resource('TCPIP0::172.16.40.214::7000::SOCKET',read_termination='\r\n',timeout=200)
         except Exception:
-            self.dialog_signal.emit('??','????????????')
-            Log.logger.error('????????????')
+            self.dialog_signal.emit('错误','设备连接失败，请检查连接')
+            Log.logger.error('设备连接失败，请检查连接')
             sys.exit()
         self.dataDict['Mode'] = self.powerGetMode()
         self.dataDict['time'] = time.time()
@@ -1227,7 +1239,7 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetStatus(channel,retries-1)
-            Log.logger.warning('????'+str(channel)+'??????,????????')
+            Log.logger.warning('获取通道'+str(channel)+'电源状态失败,使用上一次数据。')
             return self.dataDict.get('Status'+str(channel), 0)
 
     def parse_power_status(self, value):
@@ -1265,7 +1277,7 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetVoltage(channel,retries-1)
-            Log.logger.warning('????'+str(channel)+'????????,????????')
+            Log.logger.warning('获取通道'+str(channel)+'电压设置数据失败,使用上一次数据。')
             return self.dataDict.get('setVoltage'+str(channel), 0)
 
     def powerGetCurrent(self,channel,retries=5):
@@ -1276,7 +1288,7 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetCurrent(channel,retries-1)
-            Log.logger.warning('????'+str(channel)+'????????,????????')
+            Log.logger.warning('获取通道'+str(channel)+'限流设置数据失败,使用上一次数据。')
             return self.dataDict.get('setCurrent'+str(channel), 0)
 
     def powerGetMeasVoltage(self,channel,retries=5):
@@ -1287,7 +1299,7 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetMeasVoltage(channel,retries-1)
-            Log.logger.warning('????'+str(channel)+'??????,????????')
+            Log.logger.warning('获取通道'+str(channel)+'电压数据失败,使用上一次数据。')
             return self.dataDict.get('Voltage'+str(channel), 0)
 
     def powerGetMeasCurrent(self,channel,retries=5):
@@ -1298,7 +1310,7 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetMeasCurrent(channel,retries-1)
-            Log.logger.warning('????'+str(channel)+'??????,????????')
+            Log.logger.warning('获取通道'+str(channel)+'电流数据失败,使用上一次数据。')
             return self.dataDict.get('Current'+str(channel), 0)
 
     def powerGetMode(self,retries=5):
@@ -1316,7 +1328,7 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetMode(retries-1)
-            Log.logger.warning('??????,????????')
+            Log.logger.warning('获取模式失败,使用上一次数据。')
             return self.dataDict.get('Mode', 0)
 
     def powerSetMode(self,mode):
@@ -1336,7 +1348,7 @@ class PowerSupply(QThread):
             self.Power.write('OUTP:PARA 0')
             self.Power.write('OUTP:SERI 0')
             self.Power.write('OUTP:TRAC 1')
-        Log.logger.info('??????'+str(mode))
+        Log.logger.info('设置模式为：'+str(mode))
         return mode
 
 class MyDialog(QTableWidget):
