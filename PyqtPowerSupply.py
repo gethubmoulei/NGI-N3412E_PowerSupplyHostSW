@@ -1,4 +1,4 @@
-import pyvisa
+﻿import pyvisa
 import time
 import copy
 from collections import deque
@@ -23,7 +23,7 @@ def busy_wait_nanos(nanoseconds):
         pass
 
 class Window(QMainWindow, Ui_MainWindow):
-    _startRunList = pyqtSignal(str)  # 信号
+    _startRunList = pyqtSignal(str)  # 淇″彿
 
     def __init__(self, app):
         super(QMainWindow, self).__init__()
@@ -53,7 +53,7 @@ class Window(QMainWindow, Ui_MainWindow):
         self.powerSupply = PowerSupply()
         self.powerSupply.powerInit()
         self.runStep.powerSupply = self.powerSupply
-        self.connect_signals()  # 绑定触发事件
+        self.connect_signals()  # 缁戝畾瑙﹀彂浜嬩欢
         self.flush_spinBox()
         self.flush_mode()
         self.pgtimer = QtCore.QTimer()
@@ -64,7 +64,7 @@ class Window(QMainWindow, Ui_MainWindow):
     def setup_ui(self):
         self.setupUi(self)
         self.set_graph_ui()
-        self.polish_ui()  # 设置绘图窗口
+        self.polish_ui()  # 璁剧疆缁樺浘绐楀彛
 
     def polish_ui(self):
         self.setWindowTitle('Power Supply Console')
@@ -171,6 +171,9 @@ class Window(QMainWindow, Ui_MainWindow):
 
         self.configure_widgets()
         self.apply_theme()
+        self.currentFlowRow = -1
+        self.flowStatusColumn = 2
+        self.update_run_controls('idle')
 
     def reparent_legacy_widgets(self):
         for widget in (
@@ -391,6 +394,15 @@ class Window(QMainWindow, Ui_MainWindow):
                 background: #1e293b;
                 border-color: #475569;
             }
+            QPushButton[active="true"] {
+                border: 2px solid #93c5fd;
+                color: #ffffff;
+            }
+            QPushButton:disabled {
+                background: #111827;
+                border-color: #1f2937;
+                color: #64748b;
+            }
             QSpinBox, QDoubleSpinBox, QComboBox {
                 background: #0f172a;
                 border: 1px solid #334155;
@@ -499,8 +511,8 @@ class Window(QMainWindow, Ui_MainWindow):
         self.w = pg.PlotWidget(axisItems={'bottom': axisItems})
         self.w.setBackground('#0b1220')
         self.w.showGrid(x=True, y=True, alpha=0.22)
-        self.w.setLabel('left', text='电压', color='#bfdbfe')
-        self.w.setLabel('right', text='电流', color='#bfdbfe')
+        self.w.setLabel('left', text='鐢靛帇', color='#bfdbfe')
+        self.w.setLabel('right', text='鐢垫祦', color='#bfdbfe')
         self.w.setLogMode(x=False, y=False)
         self.w.setMenuEnabled(False)
         self.w.getPlotItem().layout.setContentsMargins(8, 8, 8, 8)
@@ -611,7 +623,7 @@ class Window(QMainWindow, Ui_MainWindow):
             self.textItem_v3.setVisible(False)
         
     def plot_show(self):
-        # 显示波形
+        # 鏄剧ず娉㈠舰
         dataDict = self.powerSupply.snapshot()
         required_keys = ('time', 'Current1', 'Voltage1', 'Current2', 'Voltage2', 'Current3', 'Voltage3')
         if not all(key in dataDict for key in required_keys):
@@ -653,7 +665,7 @@ class Window(QMainWindow, Ui_MainWindow):
             self.plotVol3.clear()
 
     def connect_signals(self):
-        # 绑定触发事件
+        # 缁戝畾瑙﹀彂浜嬩欢
         self.pushButton_start.clicked.connect(self.btn_start_clicked)
         self.pushButton_pause.clicked.connect(self.btn_pause_clicked)
         self.pushButton_stop.clicked.connect(self.btn_stop_clicked)
@@ -684,6 +696,8 @@ class Window(QMainWindow, Ui_MainWindow):
         
         self._startRunList.connect(self.runStep.rec_data_and_run)
         self.runStep._runListError.connect(self.dialog)
+        self.runStep._stateChanged.connect(self.update_run_controls)
+        self.runStep._stepChanged.connect(self.highlight_flow_step)
         self.tableWidget_flow._tableDeleteAll.connect(self.dialog)
         self.powerSupply.dialog_signal.connect(self.dialog)
         self.myDialog._dialog_result_signal.connect(self.tableWidget_flow.delete_row_all_handel)
@@ -711,7 +725,10 @@ class Window(QMainWindow, Ui_MainWindow):
         btn = self.sender()
         row = self.tableWidget_flow.rowCount()
         self.tableWidget_flow.insertRow(row)
-        self.tableWidget_flow.setItem(row, 0, QTableWidgetItem(btn.text()))
+        command_key = self.command_key_from_object_name(btn.objectName())
+        command_item = QTableWidgetItem(btn.text())
+        command_item.setData(Qt.UserRole, command_key)
+        self.tableWidget_flow.setItem(row, 0, command_item)
         if 'channel' in btn.objectName():
             value = self.spinBox_channel.value()
         elif 'output' in btn.objectName():
@@ -726,23 +743,51 @@ class Window(QMainWindow, Ui_MainWindow):
             self.tableWidget_flow.removeRow(row)
             return
         self.tableWidget_flow.setItem(row, 1, QTableWidgetItem(str(value)))
+
+    def command_key_from_object_name(self, object_name):
+        if 'channel' in object_name:
+            return 'channel'
+        if 'output' in object_name:
+            return 'output'
+        if 'setV' in object_name:
+            return 'setV'
+        if 'setI' in object_name:
+            return 'setI'
+        if 'setT' in object_name:
+            return 'setT'
+        return object_name
+
+    def command_key_from_text(self, text):
+        if '通道' in text or 'channel' in text.lower():
+            return 'channel'
+        if '开关' in text or '输出' in text:
+            return 'output'
+        if '电压' in text:
+            return 'setV'
+        if '限流' in text or '电流' in text:
+            return 'setI'
+        if '延时' in text or 'delay' in text.lower():
+            return 'setT'
+        return text
     
     def start_flow(self):
         if self.tableWidget_flow.rowCount() == 0:
-            return
+            return False
         self.stepList = []
         for i in range(self.tableWidget_flow.rowCount()):
             step_item = self.tableWidget_flow.item(i, 0)
             value_item = self.tableWidget_flow.item(i, 1)
             if step_item is None or value_item is None:
                 continue
-            step = step_item.text()
+            command_key = step_item.data(Qt.UserRole) or self.command_key_from_text(step_item.text())
             value = value_item.text()
-            self.stepList.append({step:value})
+            self.stepList.append({'command': command_key, 'text': step_item.text(), 'value': value})
         if not self.stepList:
-            return
+            return False
+        self.clear_flow_highlight()
         self.runStep.step_pause_event.set()
-        self._startRunList.emit(json.dumps({'stepList': self.stepList}))  # 发送信号给槽函数
+        self._startRunList.emit(json.dumps({'stepList': self.stepList}))
+        return True  # 鍙戦€佷俊鍙风粰妲藉嚱鏁?
         
     def pushButton_CH_ONOFF(self):
         btn = self.sender()
@@ -762,17 +807,84 @@ class Window(QMainWindow, Ui_MainWindow):
     
 
     def btn_start_clicked(self):
-        #如果runList线程没有运行
         if self.runStep.isRunning() == False:
-            self.start_flow()
-        #如果线程处于等待状态
+            if self.start_flow():
+                self.update_run_controls('running')
         elif self.runStep.step_pause_event.is_set() == False:
             self.runStep.step_pause_event.set()
+            self.update_run_controls('running')
     def btn_pause_clicked(self):
-        self.runStep.step_pause_event.clear()
+        if not self.runStep.isRunning():
+            return
+        if self.runStep.step_pause_event.is_set():
+            self.runStep.step_pause_event.clear()
+            self.update_run_controls('paused')
+        else:
+            self.runStep.step_pause_event.set()
+            self.update_run_controls('running')
     def btn_stop_clicked(self):
+        if not self.runStep.isRunning():
+            self.update_run_controls('idle')
+            return
+        if self.currentFlowRow >= 0:
+            self.set_flow_row_status(self.currentFlowRow, '已停止')
         self.runStep.set_stop()
         self.runStep.step_pause_event.set()
+        self.update_run_controls('stopped')
+
+    def update_run_controls(self, state):
+        if state == 'stopped':
+            state = 'idle'
+        is_idle = state == 'idle'
+        is_running = state == 'running'
+        is_paused = state == 'paused'
+
+        self.pushButton_start.setEnabled(is_idle)
+        self.pushButton_pause.setEnabled(is_running or is_paused)
+        self.pushButton_stop.setEnabled(is_running or is_paused)
+        self.pushButton_pause.setText('继续' if is_paused else '暂停')
+
+        active_map = {
+            self.pushButton_start: is_idle,
+            self.pushButton_pause: is_running or is_paused,
+            self.pushButton_stop: is_running or is_paused,
+        }
+        for button, active in active_map.items():
+            button.setProperty('active', 'true' if active else 'false')
+            button.style().unpolish(button)
+            button.style().polish(button)
+        if is_idle:
+            self.clear_flow_highlight()
+
+    def highlight_flow_step(self, row):
+        if 0 <= getattr(self, 'currentFlowRow', -1) < self.tableWidget_flow.rowCount() and self.currentFlowRow != row:
+            self.set_flow_row_status(self.currentFlowRow, '已完成')
+        self.currentFlowRow = row
+        if row < 0 or row >= self.tableWidget_flow.rowCount():
+            return
+        self.set_flow_row_status(row, '运行中')
+        self.tableWidget_flow.blockSignals(True)
+        self.tableWidget_flow.clearSelection()
+        self.tableWidget_flow.selectRow(row)
+        self.tableWidget_flow.setCurrentCell(row, 0)
+        self.tableWidget_flow.scrollToItem(self.tableWidget_flow.item(row, 0), QAbstractItemView.PositionAtCenter)
+        self.tableWidget_flow.blockSignals(False)
+
+    def set_flow_row_status(self, row, text):
+        if row < 0 or row >= self.tableWidget_flow.rowCount():
+            return
+        item = self.tableWidget_flow.item(row, self.flowStatusColumn)
+        if item is None:
+            item = QTableWidgetItem()
+            self.tableWidget_flow.setItem(row, self.flowStatusColumn, item)
+        item.setText(text)
+
+    def clear_flow_highlight(self):
+        if hasattr(self, 'tableWidget_flow'):
+            self.tableWidget_flow.clearSelection()
+            for row in range(self.tableWidget_flow.rowCount()):
+                self.set_flow_row_status(row, '')
+        self.currentFlowRow = -1
     def btn_pause_graph_clicked(self):
         if self.pushButton_pauseGraph.text() == '暂停':
             self.pushButton_pauseGraph.setText('继续')
@@ -804,8 +916,8 @@ class Window(QMainWindow, Ui_MainWindow):
         power_data = self.powerSupply.snapshot()
         powerStatus = power_data.get('Status1', 0) or power_data.get('Status2', 0) or power_data.get('Status3', 0)
         if powerStatus != 0:
-            self.dialog('警告', '请先关闭输出')
-            Log.logger.warning('请先关闭输出')
+            self.dialog('璀﹀憡', '璇峰厛鍏抽棴杈撳嚭')
+            Log.logger.warning('璇峰厛鍏抽棴杈撳嚭')
             self.comboBox_mode.setCurrentIndex(self.mode)
             return
         comboBox = self.sender()
@@ -818,8 +930,8 @@ class Window(QMainWindow, Ui_MainWindow):
             self.comboBox_mode.currentIndexChanged.disconnect(self.set_mode)
             comboBox.setCurrentIndex(mode_old)
             self.comboBox_mode.currentIndexChanged.connect(self.set_mode)
-            self.dialog('错误', '设置模式失败')
-            Log.logger.error('设置模式失败')
+            self.dialog('閿欒', '璁剧疆妯″紡澶辫触')
+            Log.logger.error('璁剧疆妯″紡澶辫触')
             return
         self.update_mode_overlay()
         self.comboBox_mode.currentIndexChanged.disconnect(self.set_mode)
@@ -868,7 +980,9 @@ class Window(QMainWindow, Ui_MainWindow):
         
 
 class RunListThread(QThread):
-    _runListError = pyqtSignal(str,str)  # 信号
+    _runListError = pyqtSignal(str,str)  # 淇″彿
+    _stateChanged = pyqtSignal(str)
+    _stepChanged = pyqtSignal(int)
 
     def __init__(self):
         super().__init__()
@@ -879,75 +993,118 @@ class RunListThread(QThread):
         self.stop = False
         self.data = []
         self.powerSupply = None
+        self.currentRow = -1
 
     def run(self):
         self.pause = False
         self.stop = False
+        self._stateChanged.emit('running')
         if self.powerSupply is None:
             self._runListError.emit('错误','电源控制对象未初始化')
+            self._stateChanged.emit('idle')
             return
         while True:
-            for dic in self.data:
+            for row, dic in enumerate(self.data):
                 self.qmut.lock()
                 should_stop = self.stop
                 self.qmut.unlock()
                 if should_stop:
                     break
-                for key,value in dic.items():
-                    self.step_pause_event.wait()
-                    self.qmut.lock()
-                    should_stop = self.stop
-                    self.qmut.unlock()
-                    if should_stop:
+                self.currentRow = row
+                self._stepChanged.emit(row)
+                command, value = self.normalize_step(dic)
+                self.step_pause_event.wait()
+                self.qmut.lock()
+                should_stop = self.stop
+                self.qmut.unlock()
+                if should_stop:
+                    break
+                if command == 'setT':
+                    self.wait_with_pause(float(value))
+                elif command == 'channel':
+                    self.channel = int(float(value))
+                elif command == 'output':
+                    if not hasattr(self,'channel'):
+                        self.set_stop()
+                        self._runListError.emit('错误','请先设置通道号')
                         break
-                    if '延时' in key:
-                        time.sleep(float(value))
-                    elif '通道' in key:
-                        self.channel = int(value)
-                    elif '开关' in key:
-                        if not hasattr(self,'channel'):
-                            self.set_stop()
-                            self._runListError.emit('错误','请先设置通道号')
-                            break
-                        self.powerSupply.powerAddQueen({key:{self.powerSupply.powerSwitch:[self.channel,self.str_to_bool(value)]}})
-                    elif '电压' in key:
-                        if not hasattr(self,'channel'):
-                            self.set_stop()
-                            self._runListError.emit('错误','请先设置通道号')
-                            break
-                        self.powerSupply.powerAddQueen({key:{self.powerSupply.powerVoltage:[self.channel,float(value)]}})
-                    elif '限流' in key:
-                        if not hasattr(self,'channel'):
-                            self.set_stop()
-                            self._runListError.emit('错误','请先设置通道号')
-                            break
-                        self.powerSupply.powerAddQueen({key:{self.powerSupply.powerCurrent:[self.channel,float(value)]}})
+                    self.powerSupply.powerAddQueen({'ONOFF'+str(self.channel):{self.powerSupply.powerSwitch:[self.channel,self.str_to_bool(str(value))]}})
+                elif command == 'setV':
+                    if not hasattr(self,'channel'):
+                        self.set_stop()
+                        self._runListError.emit('错误','请先设置通道号')
+                        break
+                    self.powerSupply.powerAddQueen({'setVoltage'+str(self.channel):{self.powerSupply.powerVoltage:[self.channel,float(value)]}})
+                elif command == 'setI':
+                    if not hasattr(self,'channel'):
+                        self.set_stop()
+                        self._runListError.emit('错误','请先设置通道号')
+                        break
+                    self.powerSupply.powerAddQueen({'setCurrent'+str(self.channel):{self.powerSupply.powerCurrent:[self.channel,float(value)]}})
             self.qmut.lock()
             should_repeat = self.repeat and not self.stop
+            should_stop = self.stop
             self.qmut.unlock()
             if not should_repeat:
                 break
+        self.currentRow = -1
+        self._stateChanged.emit('stopped' if should_stop else 'idle')
+
+    def normalize_step(self, dic):
+        if 'command' in dic:
+            return dic.get('command'), dic.get('value')
+        key, value = next(iter(dic.items()))
+        if '延时' in key:
+            return 'setT', value
+        if '通道' in key:
+            return 'channel', value
+        if '开关' in key or '输出' in key:
+            return 'output', value
+        if '电压' in key:
+            return 'setV', value
+        if '限流' in key or '电流' in key:
+            return 'setI', value
+        return key, value
+
+    def wait_with_pause(self, seconds):
+        end_time = time.monotonic() + seconds
+        while time.monotonic() < end_time:
+            self.step_pause_event.wait()
+            self.qmut.lock()
+            should_stop = self.stop
+            self.qmut.unlock()
+            if should_stop:
+                return
+            time.sleep(min(0.05, max(0, end_time - time.monotonic())))
+
     def set_repeat(self):
         checBox = self.sender()
         self.qmut.lock()
         self.repeat = checBox.isChecked()
         self.qmut.unlock()
+
     def set_stop(self):
         self.qmut.lock()
         self.stop = True
         self.qmut.unlock()
+        self._stateChanged.emit('stopped')
+
     def rec_data_and_run(self, data):
         self.qmut.lock()
-        self.data = []
         self.data = copy.deepcopy(json.loads(data)['stepList'])
+        self.stop = False
+        self.currentRow = -1
         self.qmut.unlock()
         self.start()
+
     def str_to_bool(self,s):
         return s == '1'
-    
+
+
 class PowerSupply(QThread):
     displayQthread_signal = pyqtSignal(dict)
     dialog_signal = pyqtSignal(str,str)
+
     def __init__(self):
         super().__init__()
         self.qmut = QMutex()
@@ -966,13 +1123,13 @@ class PowerSupply(QThread):
                            'Status3':{self.powerGetStatus:3}}
         self.dataDict = {}
         self._setpointRefreshCount = 0
-        
+
     def powerInit(self):
         try:
-            self.Power = self.rm.open_resource('TCPIP0::172.16.40.214::7000::SOCKET',read_termination = '\r\n',timeout = 200)
-        except:
-            self.dialog_signal.emit('错误','设备连接失败，请检查连接')
-            Log.logger.error('设备连接失败，请检查连接')
+            self.Power = self.rm.open_resource('TCPIP0::172.16.40.214::7000::SOCKET',read_termination='\r\n',timeout=200)
+        except Exception:
+            self.dialog_signal.emit('??','????????????')
+            Log.logger.error('????????????')
             sys.exit()
         self.dataDict['Mode'] = self.powerGetMode()
         self.dataDict['time'] = time.time()
@@ -985,11 +1142,11 @@ class PowerSupply(QThread):
         self.dataDict['Status1'] = self.powerGetStatus(1)
         self.dataDict['Status2'] = self.powerGetStatus(2)
         self.dataDict['Status3'] = self.powerGetStatus(3)
-        self.start() 
+        self.start()
         self.displayTimer = QtCore.QTimer()
         self.displayTimer.timeout.connect(self.displaySender)
         self.displayTimer.start(500)
-        
+
     def displaySender(self):
         self.displayQthread_signal.emit(self.snapshot())
 
@@ -998,7 +1155,7 @@ class PowerSupply(QThread):
         data = dict(self.dataDict)
         self.qmut.unlock()
         return data
-        
+
     def run(self):
         next_tick = time.monotonic()
         while True:
@@ -1008,13 +1165,10 @@ class PowerSupply(QThread):
             if sleep_time > 0:
                 time.sleep(min(sleep_time, 0.01))
                 continue
-
             next_tick = now_monotonic + self.flushTime
-            now = time.time()
             self.qmut.lock()
-            self.dataDict['time'] = now
+            self.dataDict['time'] = time.time()
             self.qmut.unlock()
-
             for key,fun_val in self.myLoopDict.items():
                 self._drain_commands(self.maxCommandsPerCycle)
                 function, value = next(iter(fun_val.items()))
@@ -1022,7 +1176,6 @@ class PowerSupply(QThread):
                 self.qmut.lock()
                 self.dataDict[key] = result
                 self.qmut.unlock()
-
             self._refresh_setpoints_periodically()
             self._drain_commands(self.maxCommandsPerCycle)
 
@@ -1032,12 +1185,9 @@ class PowerSupply(QThread):
             return
         self._setpointRefreshCount = 0
         setpoint_getters = (
-            ('setVoltage1', self.powerGetVoltage, 1),
-            ('setCurrent1', self.powerGetCurrent, 1),
-            ('setVoltage2', self.powerGetVoltage, 2),
-            ('setCurrent2', self.powerGetCurrent, 2),
-            ('setVoltage3', self.powerGetVoltage, 3),
-            ('setCurrent3', self.powerGetCurrent, 3),
+            ('setVoltage1', self.powerGetVoltage, 1), ('setCurrent1', self.powerGetCurrent, 1),
+            ('setVoltage2', self.powerGetVoltage, 2), ('setCurrent2', self.powerGetCurrent, 2),
+            ('setVoltage3', self.powerGetVoltage, 3), ('setCurrent3', self.powerGetCurrent, 3),
         )
         for key, function, channel in setpoint_getters:
             value = function(channel)
@@ -1062,13 +1212,13 @@ class PowerSupply(QThread):
                 self.qmut.unlock()
             processed += 1
         return processed
-                # Log.logger.info(self.dataDict)
-            # time.sleep(self.flushTime)
-            
+
     def powerAddQueen(self, command):
         self.myLoopQueen.put(command)
+
     def powerChannel(self,channel):
         self.Power.write('INST:NSEL '+str(channel))
+
     def powerGetStatus(self,channel,retries=5):
         self.powerChannel(channel)
         self.Power.write('OUTP?')
@@ -1077,7 +1227,7 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetStatus(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电源状态失败,使用上一次数据。')
+            Log.logger.warning('????'+str(channel)+'??????,????????')
             return self.dataDict.get('Status'+str(channel), 0)
 
     def parse_power_status(self, value):
@@ -1087,26 +1237,26 @@ class PowerSupply(QThread):
         if text in ('OFF', 'FALSE'):
             return 0
         return 1 if float(text or 0) != 0 else 0
-    
+
     def powerSwitch(self,channel,state):
         self.Power.write('INST:NSEL '+str(channel))
-        if state == True:
-            self.Power.write('OUTP 1')
-            return 1
-        else:
-            self.Power.write('OUTP 0')
-            return 0
+        self.Power.write('OUTP 1' if state else 'OUTP 0')
+        return 1 if state else 0
+
     def powerVoltage(self,channel,voltage):
         self.Power.write('INST:NSEL '+str(channel))
         self.Power.write('VOLT '+str(voltage))
         return float(voltage)
+
     def powerCurrent(self,channel,current):
         self.Power.write('INST:NSEL '+str(channel))
         self.Power.write('CURR '+str(current))
         return float(current)
+
     def powerSetVoltageCurrent(self,voltage,current):
         self.Power.write('VOLT '+str(voltage))
         self.Power.write('CURR '+str(current))
+
     def powerGetVoltage(self,channel,retries=5):
         self.powerChannel(channel)
         self.Power.write('VOLT?')
@@ -1115,8 +1265,9 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetVoltage(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电压设置数据失败,使用上一次数据。')
+            Log.logger.warning('????'+str(channel)+'????????,????????')
             return self.dataDict.get('setVoltage'+str(channel), 0)
+
     def powerGetCurrent(self,channel,retries=5):
         self.powerChannel(channel)
         self.Power.write('CURR?')
@@ -1125,9 +1276,9 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetCurrent(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'限流设置数据失败,使用上一次数据。')
+            Log.logger.warning('????'+str(channel)+'????????,????????')
             return self.dataDict.get('setCurrent'+str(channel), 0)
-    
+
     def powerGetMeasVoltage(self,channel,retries=5):
         self.Power.write('INST:NSEL '+str(channel))
         self.Power.write('MEAS:VOLT?')
@@ -1136,8 +1287,9 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetMeasVoltage(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电压数据失败,使用上一次数据。')
+            Log.logger.warning('????'+str(channel)+'??????,????????')
             return self.dataDict.get('Voltage'+str(channel), 0)
+
     def powerGetMeasCurrent(self,channel,retries=5):
         self.Power.write('INST:NSEL '+str(channel))
         self.Power.write('MEAS:CURR?')
@@ -1146,9 +1298,9 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetMeasCurrent(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电流数据失败,使用上一次数据。')
+            Log.logger.warning('????'+str(channel)+'??????,????????')
             return self.dataDict.get('Current'+str(channel), 0)
-    
+
     def powerGetMode(self,retries=5):
         try:
             self.Power.write('OUTP:PARA?')
@@ -1164,9 +1316,9 @@ class PowerSupply(QThread):
         except Exception:
             if retries > 0:
                 return self.powerGetMode(retries-1)
-            Log.logger.warning('获取模式失败,使用上一次数据。')
+            Log.logger.warning('??????,????????')
             return self.dataDict.get('Mode', 0)
-        
+
     def powerSetMode(self,mode):
         if mode == 0:
             self.Power.write('OUTP:PARA 0')
@@ -1184,30 +1336,23 @@ class PowerSupply(QThread):
             self.Power.write('OUTP:PARA 0')
             self.Power.write('OUTP:SERI 0')
             self.Power.write('OUTP:TRAC 1')
-        Log.logger.info('设置模式为：'+str(mode))
-        
-        
-#提示弹窗   
+        Log.logger.info('??????'+str(mode))
+        return mode
+
 class MyDialog(QTableWidget):
     _dialog_result_signal = pyqtSignal(int)
     def dialog(self,Level,Text):
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Warning)
         msg.setText(Text)
-        # msg.setInformativeText("This is additional information")
         msg.setWindowTitle(Level)
-        # msg.setDetailedText("The details are as follows:")
         msg.setStandardButtons(QMessageBox.Ok)
         msg.buttonClicked.connect(msg.close)
         result = msg.exec_()
-        self._dialog_result_signal.emit(result)  # 发出信号，传递用户点击的按钮
+        self._dialog_result_signal.emit(result)
 
 if __name__ == "__main__":
-    # import pyqtgraph.examples
-    # pyqtgraph.examples.run()
     app = QApplication(sys.argv)
     mywindow = Window(app)
     mywindow.show()
     sys.exit(app.exec_())
-
-
