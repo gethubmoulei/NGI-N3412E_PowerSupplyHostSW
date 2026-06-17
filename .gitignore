@@ -4,5 +4,6 @@ Logs/
 dist/
 test.py
 powerSupply.py
-*.spec
+PyqtPowerSupply.spec
 .*/
+*.spec 

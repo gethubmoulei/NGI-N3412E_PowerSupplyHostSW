@@ -789,10 +789,17 @@ class Window(QMainWindow, Ui_MainWindow):
         for i in range(self.tableWidget_flow.rowCount()):
             step_item = self.tableWidget_flow.item(i, 0)
             value_item = self.tableWidget_flow.item(i, 1)
-            if step_item is None or value_item is None:
-                continue
+            if step_item is None or value_item is None or not value_item.text().strip():
+                self.dialog('错误', f'第 {i+1} 行数据不完整，请补充命令和参数')
+                return False
             command_key = step_item.data(Qt.UserRole) or self.command_key_from_text(step_item.text())
-            value = value_item.text()
+            value = value_item.text().strip()
+            if command_key in ('channel', 'output', 'setV', 'setI', 'setT'):
+                try:
+                    float(value)
+                except ValueError:
+                    self.dialog('错误', f'第 {i+1} 行参数"{value}"不是有效数值')
+                    return False
             self.stepList.append({'command': command_key, 'text': step_item.text(), 'value': value})
         if not self.stepList:
             return False
@@ -919,7 +926,9 @@ class Window(QMainWindow, Ui_MainWindow):
         self.comboBox_mode.currentIndexChanged.connect(self.set_mode)
         
     def set_flush_time(self):
+        self.powerSupply.qmut.lock()
         self.powerSupply.flushTime = self.spinBox_flushTime.value()/1000
+        self.powerSupply.qmut.unlock()
         self.plotRefreshMs = max(100, int(self.spinBox_flushTime.value()))
         if self.pgtimer.isActive():
             self.pgtimer.start(self.plotRefreshMs)
@@ -1007,6 +1016,8 @@ class RunListThread(QThread):
         self.powerSupply = None
         self.currentRow = -1
 
+    MIN_STEP_GAP = 0.1
+
     def run(self):
         self.pause = False
         self.stop = False
@@ -1031,28 +1042,37 @@ class RunListThread(QThread):
                 self.qmut.unlock()
                 if should_stop:
                     break
-                if command == 'setT':
-                    self.wait_with_pause(float(value))
-                elif command == 'channel':
-                    self.channel = int(float(value))
-                elif command == 'output':
-                    if not hasattr(self,'channel'):
-                        self.set_stop()
-                        self._runListError.emit('错误','请先设置通道号')
-                        break
-                    self.powerSupply.powerAddQueen({'ONOFF'+str(self.channel):{self.powerSupply.powerSwitch:[self.channel,self.str_to_bool(str(value))]}})
-                elif command == 'setV':
-                    if not hasattr(self,'channel'):
-                        self.set_stop()
-                        self._runListError.emit('错误','请先设置通道号')
-                        break
-                    self.powerSupply.powerAddQueen({'setVoltage'+str(self.channel):{self.powerSupply.powerVoltage:[self.channel,float(value)]}})
-                elif command == 'setI':
-                    if not hasattr(self,'channel'):
-                        self.set_stop()
-                        self._runListError.emit('错误','请先设置通道号')
-                        break
-                    self.powerSupply.powerAddQueen({'setCurrent'+str(self.channel):{self.powerSupply.powerCurrent:[self.channel,float(value)]}})
+                try:
+                    if command == 'setT':
+                        extra = max(0, float(value) - self.MIN_STEP_GAP)
+                        self.wait_with_pause(extra + self.MIN_STEP_GAP)
+                        continue
+                    elif command == 'channel':
+                        self.channel = int(float(value))
+                    elif command == 'output':
+                        if not hasattr(self,'channel'):
+                            self.set_stop()
+                            self._runListError.emit('错误','请先设置通道号')
+                            break
+                        self.powerSupply.powerAddQueen({'ONOFF'+str(self.channel):{self.powerSupply.powerSwitch:[self.channel,self.str_to_bool(str(value))]}})
+                    elif command == 'setV':
+                        if not hasattr(self,'channel'):
+                            self.set_stop()
+                            self._runListError.emit('错误','请先设置通道号')
+                            break
+                        self.powerSupply.powerAddQueen({'setVoltage'+str(self.channel):{self.powerSupply.powerVoltage:[self.channel,float(value)]}})
+                    elif command == 'setI':
+                        if not hasattr(self,'channel'):
+                            self.set_stop()
+                            self._runListError.emit('错误','请先设置通道号')
+                            break
+                        self.powerSupply.powerAddQueen({'setCurrent'+str(self.channel):{self.powerSupply.powerCurrent:[self.channel,float(value)]}})
+                    # Auto-wait to let the device settle after each command step
+                    self.wait_with_pause(self.MIN_STEP_GAP)
+                except (ValueError, TypeError):
+                    self.set_stop()
+                    self._runListError.emit('错误', f'第 {row+1} 步参数无效: {value}')
+                    break
             self.qmut.lock()
             should_repeat = self.repeat and not self.stop
             should_stop = self.stop
@@ -1107,7 +1127,8 @@ class RunListThread(QThread):
         self.stop = False
         self.currentRow = -1
         self.qmut.unlock()
-        self.start()
+        if not self.isRunning():
+            self.start()
 
     def str_to_bool(self,s):
         return s == '1'
@@ -1171,13 +1192,17 @@ class PowerSupply(QThread):
     def run(self):
         next_tick = time.monotonic()
         while True:
-            self._drain_commands(self.maxCommandsPerCycle)
             now_monotonic = time.monotonic()
             sleep_time = next_tick - now_monotonic
             if sleep_time > 0:
+                self._drain_commands(self.maxCommandsPerCycle)
                 time.sleep(min(sleep_time, 0.01))
                 continue
-            next_tick = now_monotonic + self.flushTime
+            self.qmut.lock()
+            ft = self.flushTime
+            self.qmut.unlock()
+            next_tick = now_monotonic + ft
+            self._drain_commands(self.maxCommandsPerCycle)
             self.qmut.lock()
             self.dataDict['time'] = time.time()
             self.qmut.unlock()
@@ -1230,6 +1255,7 @@ class PowerSupply(QThread):
 
     def powerChannel(self,channel):
         self.Power.write('INST:NSEL '+str(channel))
+        time.sleep(0.005)
 
     def powerGetStatus(self,channel,retries=5):
         self.powerChannel(channel)
@@ -1251,17 +1277,17 @@ class PowerSupply(QThread):
         return 1 if float(text or 0) != 0 else 0
 
     def powerSwitch(self,channel,state):
-        self.Power.write('INST:NSEL '+str(channel))
+        self.powerChannel(channel)
         self.Power.write('OUTP 1' if state else 'OUTP 0')
         return 1 if state else 0
 
     def powerVoltage(self,channel,voltage):
-        self.Power.write('INST:NSEL '+str(channel))
+        self.powerChannel(channel)
         self.Power.write('VOLT '+str(voltage))
         return float(voltage)
 
     def powerCurrent(self,channel,current):
-        self.Power.write('INST:NSEL '+str(channel))
+        self.powerChannel(channel)
         self.Power.write('CURR '+str(current))
         return float(current)
 
@@ -1270,7 +1296,7 @@ class PowerSupply(QThread):
         self.Power.write('CURR '+str(current))
 
     def powerGetVoltage(self,channel,retries=5):
-        self.powerChannel(channel)
+        self.Power.write('INST:NSEL '+str(channel))
         self.Power.write('VOLT?')
         try:
             return float(self.Power.read())
@@ -1281,7 +1307,7 @@ class PowerSupply(QThread):
             return self.dataDict.get('setVoltage'+str(channel), 0)
 
     def powerGetCurrent(self,channel,retries=5):
-        self.powerChannel(channel)
+        self.Power.write('INST:NSEL '+str(channel))
         self.Power.write('CURR?')
         try:
             return float(self.Power.read())
