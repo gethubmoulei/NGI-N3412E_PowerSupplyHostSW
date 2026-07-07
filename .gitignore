@@ -2,8 +2,9 @@ build/
 __pycache__/
 Logs/
 dist/
+config.json
 test.py
 powerSupply.py
 PyqtPowerSupply.spec
 .*/
-*.spec 
+*.spec

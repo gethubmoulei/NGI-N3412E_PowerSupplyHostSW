@@ -20,8 +20,8 @@ if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist __pycache__ rmdir /s /q __pycache__
 
-echo [2/3] Installing/Updating PyInstaller...
-pip install pyinstaller --upgrade -q
+echo [2/3] Installing dependencies...
+pip install -r requirements.txt -q
 
 echo [3/3] Building executable...
 pyinstaller PowerSupply.spec --noconfirm --clean

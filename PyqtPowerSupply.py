@@ -1,6 +1,7 @@
 ﻿import pyvisa
 import time
 import copy
+import os
 from collections import deque
 from queue import Empty, Queue
 import threading
@@ -15,6 +16,28 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5 import QtCore
+
+DEFAULT_VISA_RESOURCE = 'TCPIP0::172.16.40.214::7000::SOCKET'
+CONFIG_FILE = 'config.json'
+
+
+def load_visa_resource():
+    env_resource = os.environ.get('POWERSUPPLY_VISA_RESOURCE')
+    if env_resource:
+        return env_resource
+
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE)
+    try:
+        with open(config_path, 'r', encoding='utf-8') as file:
+            config = json.load(file)
+    except FileNotFoundError:
+        return DEFAULT_VISA_RESOURCE
+    except Exception as exc:
+        Log.logger.warning('读取配置文件失败，使用默认设备地址：%s', exc)
+        return DEFAULT_VISA_RESOURCE
+
+    return config.get('visa_resource') or DEFAULT_VISA_RESOURCE
+
 
 def busy_wait_nanos(nanoseconds):
     start_time = time.perf_counter_ns()
@@ -1156,13 +1179,14 @@ class PowerSupply(QThread):
                            'Status3':{self.powerGetStatus:3}}
         self.dataDict = {}
         self._setpointRefreshCount = 0
+        self.visa_resource = load_visa_resource()
 
     def powerInit(self):
         try:
-            self.Power = self.rm.open_resource('TCPIP0::172.16.40.214::7000::SOCKET',read_termination='\r\n',timeout=200)
+            self.Power = self.rm.open_resource(self.visa_resource,read_termination='\r\n',timeout=200)
         except Exception:
             self.dialog_signal.emit('错误','设备连接失败，请检查连接')
-            Log.logger.error('设备连接失败，请检查连接')
+            Log.logger.error('设备连接失败，请检查连接：%s', self.visa_resource)
             sys.exit()
         self.dataDict['Mode'] = self.powerGetMode()
         self.dataDict['time'] = time.time()

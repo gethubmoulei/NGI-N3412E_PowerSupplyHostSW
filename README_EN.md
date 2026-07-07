@@ -2,7 +2,9 @@
 
 [中文](README.md)
 
-PowerSupply is a PyQt5-based desktop control application for NGI-N3412E power supply. It communicates with power supply over VISA/TCPIP and provides channel control, real-time voltage/current plotting, step-based execution flows, and multiple channel coupling modes.
+PowerSupply is a PyQt5-based desktop control application for the NGI-N3412E programmable power supply. It communicates with the instrument over VISA/TCPIP and provides three-channel output control, real-time voltage/current plotting, step-based execution flows, and channel coupling modes.
+
+![PowerSupply main window](MainWindow.png)
 
 ## Features
 
@@ -15,8 +17,8 @@ PowerSupply is a PyQt5-based desktop control application for NGI-N3412E power su
 | Flow controls | Start, pause, resume, stop, and repeat execution flows |
 | Channel modes | Supports normal, parallel, series, and tracking modes |
 | Status refresh | Periodically reads measured values, setpoints, and output states |
-| Logging | Writes runtime logs to the Logs directory |
-| Windows packaging | Includes a PyInstaller build script for standalone executables |
+| Logging | Writes runtime logs to the `Logs/` directory |
+| Windows packaging | Includes PyInstaller configuration and a one-click build script |
 
 ## Project Structure
 
@@ -31,6 +33,8 @@ PowerSupply is a PyQt5-based desktop control application for NGI-N3412E power su
 | `icon/` | UI icon assets |
 | `PowerSupply.spec` | PyInstaller packaging configuration |
 | `build.bat` | One-click Windows build script |
+| `config.example.json` | Device connection configuration example |
+| `requirements.txt` | Python dependency list |
 | `LICENSE` | MIT License |
 
 ## Requirements
@@ -46,17 +50,33 @@ PowerSupply is a PyQt5-based desktop control application for NGI-N3412E power su
 ## Install Dependencies
 
 ```bash
-pip install PyQt5 pyvisa pyvisa-py numpy pyqtgraph pyinstaller
+pip install -r requirements.txt
 ```
 
 If you use NI-VISA as the backend, install NI-VISA Runtime first and make sure the instrument can be discovered by VISA.
 
 ## Device Connection
 
-The default VISA resource address is currently defined in `PyqtPowerSupply.py`:
+The application resolves the VISA resource address in this order:
 
-```python
-TCPIP0::172.16.40.214::7000::SOCKET
+| Priority | Source | Description |
+| --- | --- | --- |
+| 1 | `POWERSUPPLY_VISA_RESOURCE` environment variable | Useful for temporary device switching |
+| 2 | Local `config.json` | Useful for a fixed development or lab setup |
+| 3 | Built-in default | Defaults to `TCPIP0::172.16.40.214::7000::SOCKET` |
+
+For first-time setup, copy the example configuration:
+
+```bash
+copy config.example.json config.json
+```
+
+Then update `config.json` for your device:
+
+```json
+{
+  "visa_resource": "TCPIP0::172.16.40.214::7000::SOCKET"
+}
 ```
 
 Before running the application, check the following:
@@ -64,11 +84,9 @@ Before running the application, check the following:
 | Check | Description |
 | --- | --- |
 | Network | The PC and the power supply are reachable on the same network |
-| IP/port | The device IP and port match the VISA resource address in the code |
+| IP/port | The device IP and port match the VISA resource address |
 | VISA backend | PyVISA can open the TCPIP SOCKET resource |
 | Terminator | The current read termination is `\r\n` |
-
-To connect to another device, update the resource address in `PowerSupply.powerInit()`.
 
 ## Run
 
@@ -124,7 +142,7 @@ pyinstaller PowerSupply.spec --noconfirm --clean
 | Item | Description |
 | --- | --- |
 | Safety | Before operating real hardware, verify that the load, voltage, and current limits are safe |
-| Address configuration | The device address is currently hard-coded and should be updated for other environments |
+| Local configuration | `config.json` stores local device settings and is ignored by `.gitignore` |
 | Timing | Commands are handled with threads and queues; actual response time depends on instrument communication latency |
 | Logs | The runtime log directory `Logs/` is ignored by `.gitignore` |
 | Build artifacts | `build/`, `dist/`, and `__pycache__/` are not tracked |
