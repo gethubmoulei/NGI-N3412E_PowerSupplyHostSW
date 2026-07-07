@@ -1,4 +1,4 @@
-﻿import pyvisa
+import pyvisa
 import time
 import copy
 import os
@@ -936,12 +936,13 @@ class Window(QMainWindow, Ui_MainWindow):
             self.pgtimer.start(self.plotRefreshMs)
 
     def flush_spinBox(self):
-        self.doubleSpinBox_CH1_setI.setValue(self.powerSupply.powerGetCurrent(1))
-        self.doubleSpinBox_CH1_setV.setValue(self.powerSupply.powerGetVoltage(1))
-        self.doubleSpinBox_CH2_setI.setValue(self.powerSupply.powerGetCurrent(2))
-        self.doubleSpinBox_CH2_setV.setValue(self.powerSupply.powerGetVoltage(2))
-        self.doubleSpinBox_CH3_setI.setValue(self.powerSupply.powerGetCurrent(3))
-        self.doubleSpinBox_CH3_setV.setValue(self.powerSupply.powerGetVoltage(3))
+        power_data = self.powerSupply.snapshot()
+        self.doubleSpinBox_CH1_setI.setValue(float(power_data.get('setCurrent1', 0)))
+        self.doubleSpinBox_CH1_setV.setValue(float(power_data.get('setVoltage1', 0)))
+        self.doubleSpinBox_CH2_setI.setValue(float(power_data.get('setCurrent2', 0)))
+        self.doubleSpinBox_CH2_setV.setValue(float(power_data.get('setVoltage2', 0)))
+        self.doubleSpinBox_CH3_setI.setValue(float(power_data.get('setCurrent3', 0)))
+        self.doubleSpinBox_CH3_setV.setValue(float(power_data.get('setVoltage3', 0)))
     def flush_mode(self):
         self.mode = int(self.powerSupply.snapshot().get('Mode', 0))
         self.comboBox_mode.setCurrentIndex(self.mode)
@@ -1166,6 +1167,8 @@ class PowerSupply(QThread):
         self.qmut = QMutex()
         self.rm = pyvisa.ResourceManager()
         self.myLoopQueen = Queue(1000)
+        self.io_lock = threading.RLock()
+        self._selected_channel = None
         self.flushTime = 0.05
         self.maxCommandsPerCycle = 10
         self.myLoopDict = {'Current1':{self.powerGetMeasCurrent:1},
@@ -1227,34 +1230,30 @@ class PowerSupply(QThread):
             self.qmut.unlock()
             next_tick = now_monotonic + ft
             self._drain_commands(self.maxCommandsPerCycle)
-            self.qmut.lock()
-            self.dataDict['time'] = time.time()
-            self.qmut.unlock()
+            cycle_data = {'time': time.time()}
             for key,fun_val in self.myLoopDict.items():
-                self._drain_commands(self.maxCommandsPerCycle)
                 function, value = next(iter(fun_val.items()))
-                result = function(value)
-                self.qmut.lock()
-                self.dataDict[key] = result
-                self.qmut.unlock()
-            self._refresh_setpoints_periodically()
+                cycle_data[key] = function(value)
+            cycle_data.update(self._refresh_setpoints_periodically())
+            self.qmut.lock()
+            self.dataDict.update(cycle_data)
+            self.qmut.unlock()
             self._drain_commands(self.maxCommandsPerCycle)
 
     def _refresh_setpoints_periodically(self):
         self._setpointRefreshCount += 1
         if self._setpointRefreshCount < 10:
-            return
+            return {}
         self._setpointRefreshCount = 0
+        updates = {}
         setpoint_getters = (
             ('setVoltage1', self.powerGetVoltage, 1), ('setCurrent1', self.powerGetCurrent, 1),
             ('setVoltage2', self.powerGetVoltage, 2), ('setCurrent2', self.powerGetCurrent, 2),
             ('setVoltage3', self.powerGetVoltage, 3), ('setCurrent3', self.powerGetCurrent, 3),
         )
         for key, function, channel in setpoint_getters:
-            value = function(channel)
-            self.qmut.lock()
-            self.dataDict[key] = value
-            self.qmut.unlock()
+            updates[key] = function(channel)
+        return updates
 
     def _drain_commands(self, limit=None):
         processed = 0
@@ -1278,19 +1277,31 @@ class PowerSupply(QThread):
         self.myLoopQueen.put(command)
 
     def powerChannel(self,channel):
-        self.Power.write('INST:NSEL '+str(channel))
-        time.sleep(0.005)
+        with self.io_lock:
+            channel = int(channel)
+            if self._selected_channel != channel:
+                self.Power.write('INST:NSEL '+str(channel))
+                self._selected_channel = channel
+                time.sleep(0.005)
+
+    def _discard_pending_read(self):
+        try:
+            self.Power.flush(pyvisa.constants.BufferOperation.discard_receive_buffer)
+        except Exception:
+            pass
 
     def powerGetStatus(self,channel,retries=5):
-        self.powerChannel(channel)
-        self.Power.write('OUTP?')
-        try:
-            return self.parse_power_status(self.Power.read())
-        except Exception:
-            if retries > 0:
-                return self.powerGetStatus(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电源状态失败,使用上一次数据。')
-            return self.dataDict.get('Status'+str(channel), 0)
+        with self.io_lock:
+            for attempt in range(retries + 1):
+                try:
+                    self.powerChannel(channel)
+                    self.Power.write('OUTP?')
+                    return self.parse_power_status(self.Power.read())
+                except Exception:
+                    self._discard_pending_read()
+                    if attempt >= retries:
+                        Log.logger.warning('获取通道'+str(channel)+'电源状态失败,使用上一次数据。')
+                        return self.dataDict.get('Status'+str(channel), 0)
 
     def parse_power_status(self, value):
         text = str(value).strip().upper()
@@ -1298,108 +1309,126 @@ class PowerSupply(QThread):
             return 1
         if text in ('OFF', 'FALSE'):
             return 0
-        return 1 if float(text or 0) != 0 else 0
+        number = float(text)
+        if number in (0, 1):
+            return int(number)
+        raise ValueError('Invalid power status response: '+str(value))
 
     def powerSwitch(self,channel,state):
-        self.powerChannel(channel)
-        self.Power.write('OUTP 1' if state else 'OUTP 0')
-        return 1 if state else 0
+        with self.io_lock:
+            self.powerChannel(channel)
+            self.Power.write('OUTP 1' if state else 'OUTP 0')
+            return 1 if state else 0
 
     def powerVoltage(self,channel,voltage):
-        self.powerChannel(channel)
-        self.Power.write('VOLT '+str(voltage))
-        return float(voltage)
+        with self.io_lock:
+            self.powerChannel(channel)
+            self.Power.write('VOLT '+str(voltage))
+            return float(voltage)
 
     def powerCurrent(self,channel,current):
-        self.powerChannel(channel)
-        self.Power.write('CURR '+str(current))
-        return float(current)
+        with self.io_lock:
+            self.powerChannel(channel)
+            self.Power.write('CURR '+str(current))
+            return float(current)
 
     def powerSetVoltageCurrent(self,voltage,current):
-        self.Power.write('VOLT '+str(voltage))
-        self.Power.write('CURR '+str(current))
+        with self.io_lock:
+            self.Power.write('VOLT '+str(voltage))
+            self.Power.write('CURR '+str(current))
 
     def powerGetVoltage(self,channel,retries=5):
-        self.Power.write('INST:NSEL '+str(channel))
-        self.Power.write('VOLT?')
-        try:
-            return float(self.Power.read())
-        except Exception:
-            if retries > 0:
-                return self.powerGetVoltage(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电压设置数据失败,使用上一次数据。')
-            return self.dataDict.get('setVoltage'+str(channel), 0)
+        with self.io_lock:
+            for attempt in range(retries + 1):
+                try:
+                    self.powerChannel(channel)
+                    self.Power.write('VOLT?')
+                    return float(self.Power.read())
+                except Exception:
+                    self._discard_pending_read()
+                    if attempt >= retries:
+                        Log.logger.warning('获取通道'+str(channel)+'电压设置数据失败,使用上一次数据。')
+                        return self.dataDict.get('setVoltage'+str(channel), 0)
 
     def powerGetCurrent(self,channel,retries=5):
-        self.Power.write('INST:NSEL '+str(channel))
-        self.Power.write('CURR?')
-        try:
-            return float(self.Power.read())
-        except Exception:
-            if retries > 0:
-                return self.powerGetCurrent(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'限流设置数据失败,使用上一次数据。')
-            return self.dataDict.get('setCurrent'+str(channel), 0)
+        with self.io_lock:
+            for attempt in range(retries + 1):
+                try:
+                    self.powerChannel(channel)
+                    self.Power.write('CURR?')
+                    return float(self.Power.read())
+                except Exception:
+                    self._discard_pending_read()
+                    if attempt >= retries:
+                        Log.logger.warning('获取通道'+str(channel)+'限流设置数据失败,使用上一次数据。')
+                        return self.dataDict.get('setCurrent'+str(channel), 0)
 
     def powerGetMeasVoltage(self,channel,retries=5):
-        self.Power.write('INST:NSEL '+str(channel))
-        self.Power.write('MEAS:VOLT?')
-        try:
-            return float(self.Power.read())
-        except Exception:
-            if retries > 0:
-                return self.powerGetMeasVoltage(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电压数据失败,使用上一次数据。')
-            return self.dataDict.get('Voltage'+str(channel), 0)
+        with self.io_lock:
+            for attempt in range(retries + 1):
+                try:
+                    self.powerChannel(channel)
+                    self.Power.write('MEAS:VOLT?')
+                    return float(self.Power.read())
+                except Exception:
+                    self._discard_pending_read()
+                    if attempt >= retries:
+                        Log.logger.warning('获取通道'+str(channel)+'电压数据失败,使用上一次数据。')
+                        return self.dataDict.get('Voltage'+str(channel), 0)
 
     def powerGetMeasCurrent(self,channel,retries=5):
-        self.Power.write('INST:NSEL '+str(channel))
-        self.Power.write('MEAS:CURR?')
-        try:
-            return float(self.Power.read())
-        except Exception:
-            if retries > 0:
-                return self.powerGetMeasCurrent(channel,retries-1)
-            Log.logger.warning('获取通道'+str(channel)+'电流数据失败,使用上一次数据。')
-            return self.dataDict.get('Current'+str(channel), 0)
+        with self.io_lock:
+            for attempt in range(retries + 1):
+                try:
+                    self.powerChannel(channel)
+                    self.Power.write('MEAS:CURR?')
+                    return float(self.Power.read())
+                except Exception:
+                    self._discard_pending_read()
+                    if attempt >= retries:
+                        Log.logger.warning('获取通道'+str(channel)+'电流数据失败,使用上一次数据。')
+                        return self.dataDict.get('Current'+str(channel), 0)
 
     def powerGetMode(self,retries=5):
-        try:
-            self.Power.write('OUTP:PARA?')
-            if float(self.Power.read() or 0):
-                return 1
-            self.Power.write('OUTP:SERI?')
-            if float(self.Power.read() or 0):
-                return 2
-            self.Power.write('OUTP:TRAC?')
-            if float(self.Power.read() or 0):
-                return 3
-            return 0
-        except Exception:
-            if retries > 0:
-                return self.powerGetMode(retries-1)
-            Log.logger.warning('获取模式失败,使用上一次数据。')
-            return self.dataDict.get('Mode', 0)
+        with self.io_lock:
+            for attempt in range(retries + 1):
+                try:
+                    self.Power.write('OUTP:PARA?')
+                    if float(self.Power.read() or 0):
+                        return 1
+                    self.Power.write('OUTP:SERI?')
+                    if float(self.Power.read() or 0):
+                        return 2
+                    self.Power.write('OUTP:TRAC?')
+                    if float(self.Power.read() or 0):
+                        return 3
+                    return 0
+                except Exception:
+                    self._discard_pending_read()
+                    if attempt >= retries:
+                        Log.logger.warning('获取模式失败,使用上一次数据。')
+                        return self.dataDict.get('Mode', 0)
 
     def powerSetMode(self,mode):
-        if mode == 0:
-            self.Power.write('OUTP:PARA 0')
-            self.Power.write('OUTP:SERI 0')
-            self.Power.write('OUTP:TRAC 0')
-        elif mode == 1:
-            self.Power.write('OUTP:SERI 0')
-            self.Power.write('OUTP:TRAC 0')
-            self.Power.write('OUTP:PARA 1')
-        elif mode == 2:
-            self.Power.write('OUTP:PARA 0')
-            self.Power.write('OUTP:TRAC 0')
-            self.Power.write('OUTP:SERI 1')
-        elif mode == 3:
-            self.Power.write('OUTP:PARA 0')
-            self.Power.write('OUTP:SERI 0')
-            self.Power.write('OUTP:TRAC 1')
-        Log.logger.info('设置模式为：'+str(mode))
-        return mode
+        with self.io_lock:
+            if mode == 0:
+                self.Power.write('OUTP:PARA 0')
+                self.Power.write('OUTP:SERI 0')
+                self.Power.write('OUTP:TRAC 0')
+            elif mode == 1:
+                self.Power.write('OUTP:SERI 0')
+                self.Power.write('OUTP:TRAC 0')
+                self.Power.write('OUTP:PARA 1')
+            elif mode == 2:
+                self.Power.write('OUTP:PARA 0')
+                self.Power.write('OUTP:TRAC 0')
+                self.Power.write('OUTP:SERI 1')
+            elif mode == 3:
+                self.Power.write('OUTP:PARA 0')
+                self.Power.write('OUTP:SERI 0')
+                self.Power.write('OUTP:TRAC 1')
+            Log.logger.info('设置模式为：'+str(mode))
+            return mode
 
 class MyDialog(QTableWidget):
     _dialog_result_signal = pyqtSignal(int)
